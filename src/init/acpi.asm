@@ -1,19 +1,19 @@
 ; =============================================================================
 ; Pure64 -- a 64-bit OS/software loader written in Assembly for x86-64 systems
-; Copyright (C) 2008-2017 Return Infinity -- see LICENSE.TXT
+; Copyright (C) 2008-2020 Return Infinity -- see LICENSE.TXT
 ;
 ; INIT ACPI
 ; =============================================================================
 
 
 init_acpi:
-	mov rsi, 0x00000000000E0000	; Start looking for the Root System Description Pointer Structure
+	mov esi, 0x000E0000		; Start looking for the Root System Description Pointer Structure
 	mov rbx, 'RSD PTR '		; This in the Signature for the ACPI Structure Table (0x2052545020445352)
 searchingforACPI:
 	lodsq				; Load a quad word from RSI and store in RAX, then increment RSI by 8
 	cmp rax, rbx
 	je foundACPI
-	cmp rsi, 0x00000000000FFFFF	; Keep looking until we get here
+	cmp esi, 0x000FFFFF		; Keep looking until we get here
 	jge noACPI			; ACPI tables couldn't be found, Fail.
 	jmp searchingforACPI
 
@@ -36,9 +36,6 @@ nextchecksum:
 	lodsd				; OEMID (First 4 bytes)
 	lodsw				; OEMID (Last 2 bytes)
 	lodsb				; Grab the Revision value (0 is v1.0, 1 is v2.0, 2 is v3.0, etc)
-	add al, 49
-	mov [0x000B8098], al		; Print the ACPI version number
-	sub al, 49
 	cmp al, 0
 	je foundACPIv1			; If AL is 0 then the system is using ACPI v1.0
 	jmp foundACPIv2			; Otherwise it is v2.0 or higher
@@ -94,10 +91,6 @@ foundACPIv2_nextentry:
 	jne foundACPIv2_nextentry
 
 findACPITables:
-	mov al, '3'			; Search through the ACPI tables
-	mov [0x000B809C], al
-	mov al, '4'
-	mov [0x000B809E], al
 	xor ecx, ecx
 nextACPITable:
 	pop rsi
@@ -126,7 +119,6 @@ init_smp_acpi_done:
 
 noACPI:
 novalidacpi:
-	mov [0x000B809A], byte 'X'
 	jmp $
 
 

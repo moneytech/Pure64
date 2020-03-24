@@ -1,27 +1,27 @@
 ; =============================================================================
-; Pure64 PXE Start -- a 64-bit OS/software loader written in Assembly for x86-64 systems
+; Pure64 MBR -- a 64-bit OS/software loader written in Assembly for x86-64 systems
 ; Copyright (C) 2008-2020 Return Infinity -- see LICENSE.TXT
 ;
-; This is a stub file for loading Pure64 and a kernel/software package via PXE.
+; This Master Boot Record will load Pure64 from a pre-defined location on the
+; hard drive without making use of the file system.
 ;
-; Windows - copy /b pxestart.bin + pure64.sys + kernel64.sys pxeboot.bin
-; Unix - cat pxestart.bin pure64.sys kernel64.sys > pxeboot.bin
-;
-; Max size of the resulting pxeboot.bin is 33792 bytes. 1K for the PXE loader
-; stub and up to 32KiB for the code/data. PXE loads the file to address
-; 0x00007C00 (Just like a boot sector).
-;
-; File Sizes
-; pxestart.bin	 1024 bytes
-; pure64.sys	 4096 bytes
-; kernel64.sys	16384 bytes (or so)
+; In this code we are expecting a BMFS-formatted drive. With BMFS the Pure64
+; binary is required to start at sector 16 (8192 bytes from the start). A small
+; check is made to make sure Pure64 was loaded by comparing a signiture.
 ; =============================================================================
+
+; Default location of the second stage boot loader. This loads
+; 32 KiB from sector 16 into memory at 0x8000
+%define DAP_SECTORS 64
+%define DAP_STARTSECTOR 16
+%define DAP_ADDRESS 0x8000
+%define DAP_SEGMENT 0x0000
 
 
 BITS 16
 org 0x7C00
 
-start:
+entry:
 	cli				; Disable interrupts
 	cld				; Clear direction flag
 	xor eax, eax
@@ -30,6 +30,8 @@ start:
 	mov ds, ax
 	mov sp, 0x7C00
 	sti				; Enable interrupts
+
+	mov [DriveNumber], dl		; BIOS passes drive number in DL
 
 	mov ah, 0
 	mov al, 11100011b		; 9600bps, no parity, 1 stop bit, 8 data bits
@@ -102,7 +104,7 @@ check_A20:
 	mov al, 0xDF
 	out 0x60, al
 
-	mov si, msg_Load		; Print message
+	mov si, msg_Load
 	call print_string_16
 
 	mov edi, VBEModeInfoBlock	; VBE data will be stored at this address
@@ -126,6 +128,14 @@ check_A20:
 	cmp ax, 0x004F			; Return value in AX should equal 0x004F if supported and successful
 	jne halt
 
+	; Read the 2nd stage boot loader into memory.
+	mov ah, 0x42			; Extended Read
+	mov dl, [DriveNumber]		; http://www.ctyme.com/intr/rb-0708.htm
+	mov si, DAP
+	int 0x13
+	jc read_fail
+
+	; Verify that the 2nd stage boot loader was read.
 	mov ax, [0x8006]
 	cmp ax, 0x3436			; Match against the Pure64 binary
 	jne sig_fail
@@ -133,7 +143,7 @@ check_A20:
 	mov si, msg_OK
 	call print_string_16
 
-; At this point we are done with real mode and BIOS interrupts. Jump to 32-bit mode.
+	; At this point we are done with real mode and BIOS interrupts. Jump to 32-bit mode.
 	cli				; No more interrupts
 	lgdt [cs:GDTR32]		; Load GDT register
 	mov eax, cr0
@@ -141,6 +151,10 @@ check_A20:
 	mov cr0, eax
 	jmp 8:0x8000			; Jump to 32-bit protected mode
 
+read_fail:
+	mov si, msg_ReadFail
+	call print_string_16
+	jmp halt
 sig_fail:
 	mov si, msg_SigFail
 	call print_string_16
@@ -168,7 +182,6 @@ print_string_16:			; Output string in SI to screen
 	ret
 ;------------------------------------------------------------------------------
 
-
 align 16
 GDTR32:					; Global Descriptors Table Register
 dw gdt32_end - gdt32 - 1		; limit of GDT (size minus one)
@@ -181,15 +194,32 @@ dw 0xFFFF, 0x0000, 0x9A00, 0x00CF	; 32-bit code descriptor
 dw 0xFFFF, 0x0000, 0x9200, 0x00CF	; 32-bit data descriptor
 gdt32_end:
 
-msg_Load db "PXE ", 0
+msg_Load db 10, "MBR ", 0
 msg_OK db "OK", 0
 msg_SigFail db "- Bad Sig!", 0
+msg_ReadFail db "Failed to read drive!", 0
 
-times 510-$+$$ db 0			; Pad out for a normal boot sector
+times 446-$+$$ db 0
 
-sign dw 0xAA55				; BIOS boot sector signature
+; False partition table entry required by some BIOS vendors.
+db 0x80, 0x00, 0x01, 0x00, 0xEB, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF
+DriveNumber db 0x00
 
-times 1024-$+$$ db 0			; Padding so that Pure64 will be aligned at 0x8000
+times 476-$+$$ db 0
+
+align 4
+
+DAP:
+	db 0x10
+	db 0x00
+	dw DAP_SECTORS
+	dw DAP_ADDRESS
+	dw DAP_SEGMENT
+	dq DAP_STARTSECTOR
+
+times 510-$+$$ db 0
+
+sign dw 0xAA55
 
 VBEModeInfoBlock: equ 0x5C00
 ; VESA

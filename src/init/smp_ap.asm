@@ -1,12 +1,12 @@
 ; =============================================================================
 ; Pure64 -- a 64-bit OS/software loader written in Assembly for x86-64 systems
-; Copyright (C) 2008-2017 Return Infinity -- see LICENSE.TXT
+; Copyright (C) 2008-2020 Return Infinity -- see LICENSE.TXT
 ;
 ; INIT SMP AP
 ; =============================================================================
 
 
-USE16
+BITS 16
 
 init_smp_ap:
 	jmp 0x0000:clearcs_ap
@@ -41,7 +41,7 @@ align 16
 
 ; =============================================================================
 ; 32-bit mode
-USE32
+BITS 32
 
 startap32:
 	mov eax, 16			; load 4 GB data descriptor
@@ -90,17 +90,17 @@ align 16
 
 ; =============================================================================
 ; 64-bit mode
-USE64
+BITS 64
 
 startap64:
-	xor rax, rax			; aka r0
-	xor rbx, rbx			; aka r3
-	xor rcx, rcx			; aka r1
-	xor rdx, rdx			; aka r2
-	xor rsi, rsi			; aka r6
-	xor rdi, rdi			; aka r7
-	xor rbp, rbp			; aka r5
-	xor rsp, rsp			; aka r4
+	xor eax, eax			; aka r0
+	xor ebx, ebx			; aka r3
+	xor ecx, ecx			; aka r1
+	xor edx, edx			; aka r2
+	xor esi, esi			; aka r6
+	xor edi, edi			; aka r7
+	xor ebp, ebp			; aka r5
+	xor esp, esp			; aka r4
 	xor r8, r8
 	xor r9, r9
 	xor r10, r10
@@ -120,7 +120,7 @@ startap64:
 	jmp rax
 	nop
 clearcs64_ap:
-	xor rax, rax
+	xor eax, eax
 
 	; Reset the stack. Each CPU gets a 1024-byte unique stack location
 	mov rsi, [os_LocalAPICAddress]	; We would call os_smp_get_id here but the stack is not ...

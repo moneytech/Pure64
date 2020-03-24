@@ -1,6 +1,6 @@
 ; =============================================================================
 ; Pure64 -- a 64-bit OS/software loader written in Assembly for x86-64 systems
-; Copyright (C) 2008-2017 Return Infinity -- see LICENSE.TXT
+; Copyright (C) 2008-2020 Return Infinity -- see LICENSE.TXT
 ;
 ; INIT CPU - This code is called by all activated CPU cores in the system
 ; =============================================================================
@@ -17,7 +17,7 @@ init_cpu:
 ; Flush Cache
 	wbinvd
 
-; Diable Paging Global Extensions
+; Disable Paging Global Extensions
 	mov rax, cr4
 	btr rax, 7			; Clear Paging Global Extensions (Bit 7)
 	mov cr4, rax

@@ -1,3 +1,2 @@
-.DS_Store
-build
-*.sys
+*DS_Store
+bin/*

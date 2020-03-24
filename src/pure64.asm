@@ -1,6 +1,6 @@
 ; =============================================================================
 ; Pure64 -- a 64-bit OS/software loader written in Assembly for x86-64 systems
-; Copyright (C) 2008-2017 Return Infinity -- see LICENSE.TXT
+; Copyright (C) 2008-2020 Return Infinity -- see LICENSE.TXT
 ;
 ; The first stage loader is required to gather information about the system
 ; while the BIOS or UEFI is still available and load the Pure64 binary to
@@ -9,28 +9,27 @@
 ;
 ; Pure64 requires a payload for execution! The stand-alone pure64.sys file
 ; is not sufficient. You must append your kernel or software to the end of
-; the Pure64 binary. The maximum size of the kernel or software is 26KiB.
+; the Pure64 binary. The maximum size of the kernel or software is 28KiB.
 ;
 ; Windows - copy /b pure64.sys + kernel64.sys
 ; Unix - cat pure64.sys kernel64.sys > pure64.sys
 ; Max size of the resulting pure64.sys is 32768 bytes (32KiB)
 ; =============================================================================
 
+BITS 32
 
-USE32
-ORG 0x00008000
+ORG 0x8000
 
-PURE64SIZE	equ 4096		; Pad Pure64 to this length
+PURE64SIZE equ 4096			; Pad Pure64 to this length
 
 start:
 	jmp start32			; This command will be overwritten with 'NOP's before the AP's are started
 	nop
-	nop
-	nop
+	db 0x36, 0x34			; '64' marker
 
 ; =============================================================================
 ; Code for AP startup
-USE16
+BITS 16
 	cli				; Disable all interrupts
 	xor eax, eax
 	xor ebx, ebx
@@ -50,7 +49,7 @@ USE16
 
 ; =============================================================================
 ; 32-bit mode
-USE32
+BITS 32
 start32:
 	mov eax, 16			; Set the correct segment registers
 	mov ds, ax
@@ -59,14 +58,9 @@ start32:
 	mov fs, ax
 	mov gs, ax
 
-	mov edi, 0xb8000		; Clear the screen
-	mov ax, 0x0720
-	mov cx, 2000
-	rep stosw
-
-	mov edi, 0x5000			; Clear the info map
+	mov edi, 0x5000			; Clear the info map and system variable
 	xor eax, eax
-	mov cx, 1024
+	mov cx, 768
 	rep stosd
 
 	xor eax, eax			; Clear all registers
@@ -77,9 +71,6 @@ start32:
 	xor edi, edi
 	xor ebp, ebp
 	mov esp, 0x8000			; Set a known free location for the stack
-	
-	mov [0x000B809C], byte '2'	; Now in 32-bit protected mode (0x20 = 32)
-	mov [0x000B809E], byte '0'
 
 ; Set up RTC
 ; Port 0x70 is RTC Address, and 0x71 is RTC Data
@@ -117,53 +108,36 @@ rtc_poll:
 	out 0x21, al
 	out 0xA1, al
 
-; Hide VGA hardware cursor
-	mov al, 0x0F			; Cursor Low Port
-	mov dx, 0x03D4
-	out dx, al
-	mov al, 0xFF
-	mov dx, 0x03D5
-	out dx, al
-	mov al, 0x0E			; Cursor High Port
-	mov dx, 0x03D4
-	out dx, al
-	mov al, 0xFF
-	mov dx, 0x03D5
-	out dx, al
-
 ; Configure serial port @ 0x03F8
-	mov dx, 0x03F9
+	mov dx, 0x03F8 + 1		; Interrupt Enable
 	mov al, 0x00			; Disable all interrupts
 	out dx, al
-	mov al, 0x80			; Enable DLAB (set baud rate divisor)
-	add dx, 2
+	mov dx, 0x03F8 + 3		; Line Control
+	mov al, 80
 	out dx, al
-	mov al, 0x01			; Set divisor to 1 for 115200 baud
-	sub dx, 4
+	mov dx, 0x03F8 + 0		; Divisor Latch
+	mov ax, 1			; 1 = 115200 baud
+	out dx, ax
+	mov dx, 0x03F8 + 3		; Line Control
+	mov al, 3			; 8 bits, no parity, one stop bit
 	out dx, al
-	mov al, 0x00
-	add dx, 1
-	out dx, al
-	mov al, 0x03			; 8 bits, no parity, one stop bit
-	add dx, 2
+	mov dx, 0x03F8 + 4		; Modem Control
+	mov al, 3
 	out dx, al
 	mov al, 0xC7			; Enable FIFO, clear them, with 14-byte threshold
-	sub dx, 1
-	out dx, al
-	mov al, 0x0B			; IRQs enabled, RTS/DSR set
-	add dx, 2
+	mov dx, 0x03F8 + 2
 	out dx, al
 
-; Clear out the first 4096 bytes of memory. This will store the 64-bit IDT, GDT, PML4, and PDP
-	mov ecx, 1024
+; Clear out the first 20KiB of memory. This will store the 64-bit IDT, GDT, PML4, PDP Low, and PDP High
+	mov ecx, 5120
 	xor eax, eax
 	mov edi, eax
 	rep stosd
 
-; Clear memory for the Page Descriptor Entries (0x10000 - 0x4FFFF)
+; Clear memory for the Page Descriptor Entries (0x10000 - 0x5FFFF)
 	mov edi, 0x00010000
-	mov ecx, 65536
-	rep stosd
+	mov ecx, 81920
+	rep stosd			; Write 320KiB
 
 ; Copy the GDT to its final location in memory
 	mov esi, gdt64
@@ -177,13 +151,13 @@ rtc_poll:
 ; A single PML4 entry can map 512GB with 2MB pages.
 	cld
 	mov edi, 0x00002000		; Create a PML4 entry for the first 4GB of RAM
-	mov eax, 0x00003007
+	mov eax, 0x00003007		; location of low PDP
 	stosd
 	xor eax, eax
 	stosd
 
 	mov edi, 0x00002800		; Create a PML4 entry for higher half (starting at 0xFFFF800000000000)
-	mov eax, 0x00003007		; The higher half is identity mapped to the lower half
+	mov eax, 0x00004007		; location of high PDP
 	stosd
 	xor eax, eax
 	stosd
@@ -191,10 +165,10 @@ rtc_poll:
 ; Create the PDP entries.
 ; The first PDP is stored at 0x0000000000003000, create the first entries there
 ; A single PDP entry can map 1GB with 2MB pages
-	mov ecx, 64			; number of PDPE's to make.. each PDPE maps 1GB of physical memory
-	mov edi, 0x00003000
-	mov eax, 0x00010007		; location of first PD
-create_pdpe:
+	mov ecx, 4			; number of PDPE's to make.. each PDPE maps 1GB of physical memory
+	mov edi, 0x00003000		; location of low PDPE
+	mov eax, 0x00010007		; location of first low PD
+create_pdpe_low:
 	stosd
 	push eax
 	xor eax, eax
@@ -203,15 +177,13 @@ create_pdpe:
 	add eax, 0x00001000		; 4K later (512 records x 8 bytes)
 	dec ecx
 	cmp ecx, 0
-	jne create_pdpe
+	jne create_pdpe_low
 
-; Create the PD entries.
-; PD entries are stored starting at 0x0000000000010000 and ending at 0x000000000004FFFF (256 KiB)
-; This gives us room to map 64 GiB with 2 MiB pages
+; Create the low PD entries.
 	mov edi, 0x00010000
-	mov eax, 0x0000008F		; Bit 7 must be set to 1 as we have 2 MiB pages
+	mov eax, 0x0000008F		; Bits 0 (P), 1 (R/W), 2 (U/S), 3 (PWT), and 7 (PS) set
 	xor ecx, ecx
-pd_again:				; Create a 2 MiB page
+pd_low:					; Create a 2 MiB page
 	stosd
 	push eax
 	xor eax, eax
@@ -220,7 +192,7 @@ pd_again:				; Create a 2 MiB page
 	add eax, 0x00200000
 	inc ecx
 	cmp ecx, 2048
-	jne pd_again			; Create 2048 2 MiB page maps.
+	jne pd_low			; Create 2048 2 MiB page maps.
 
 ; Load the GDT
 	lgdt [GDTR64]
@@ -231,7 +203,7 @@ pd_again:				; Create a 2 MiB page
 	mov cr4, eax
 
 ; Point cr3 at PML4
-	mov eax, 0x00002008		; Write-thru (Bit 3)
+	mov eax, 0x00002008		; Write-thru enabled (Bit 3)
 	mov cr3, eax
 
 ; Enable long mode and SYSCALL/SYSRET
@@ -239,10 +211,6 @@ pd_again:				; Create a 2 MiB page
 	rdmsr				; Read EFER
 	or eax, 0x00000101 		; LME (Bit 8)
 	wrmsr				; Write EFER
-
-; Debug	
-	mov [0x000B809C], byte '1'	; About to make the jump into 64-bit mode
-	mov [0x000B809E], byte 'E'
 
 ; Enable paging to activate long mode
 	mov eax, cr0
@@ -256,13 +224,9 @@ align 16
 
 ; =============================================================================
 ; 64-bit mode
-USE64
+BITS 64
 
 start64:
-; Debug
-	mov [0x000B809C], byte '4'	; Now in 64-bit mode (0x40 = 64)
-	mov [0x000B809E], byte '0'
-
 	xor eax, eax			; aka r0
 	xor ebx, ebx			; aka r3
 	xor ecx, ecx			; aka r1
@@ -290,33 +254,102 @@ start64:
 	jmp rax				; jmp SYS64_CODE_SEL:start64 would have sent us ...
 	nop				; out of compatibility mode and into 64-bit mode
 clearcs64:
-	xor rax, rax
+	xor eax, eax
 
 	lgdt [GDTR64]			; Reload the GDT
-
-; Debug
-	mov [0x000B809E], byte '2'
 
 ; Patch Pure64 AP code			; The AP's will be told to start execution at 0x8000
 	mov edi, start			; We need to remove the BSP Jump call to get the AP's
 	mov eax, 0x90909090		; to fall through to the AP Init code
 	stosd
-	stosb				; Write 5 bytes in total to overwrite the 'far jump'
+	stosd				; Write 8 bytes in total to overwrite the 'far jump' and marker
 
-; Build the rest of the page tables (4GiB+)
-	xor ecx, ecx			; Clear the counter
-	mov rax, 0x000000010000008F
-	mov rdi, 0x0000000000014000
-buildem:
+; Process the E820 memory map to find all possible 2MiB pages that are free to use
+; Build a map at 0x400000
+	xor ecx, ecx
+	xor ebx, ebx			; Counter for pages found
+	mov esi, 0x00006000		; E820 Map location
+nextentry:
+	add esi, 16			; Skip ESI to type marker
+	mov eax, [esi]			; Load the 32-bit type marker
+	cmp eax, 0			; End of the list?
+	je end820
+	cmp eax, 1			; Is it marked as free?
+	je processfree
+	add esi, 16			; Skip ESI to start of next entry
+	jmp nextentry
+
+processfree:
+	sub esi, 16
+	mov rax, [rsi]			; Physical start address
+	add esi, 8
+	mov rcx, [rsi]			; Physical length
+	add esi, 24
+	shr rcx, 21			; Convert bytes to # of 2 MiB pages
+	cmp rcx, 0			; Do we have at least 1 page?
+	je nextentry
+	shl rax, 1
+	mov edx, 0x1FFFFF
+	not rdx				; Clear bits 20 - 0
+	and rax, rdx
+	; At this point RAX points to the start and RCX has the # of pages
+	shr rax, 21			; page # to start on
+	mov rdi, 0x400000		; 4 MiB into physical memory
+	add rdi, rax
+	mov al, 1
+	add ebx, ecx
+	rep stosb
+	jmp nextentry
+
+end820:
+	shl ebx, 1
+	mov dword [mem_amount], ebx
+	shr ebx, 1
+
+; Create the high memory map
+	mov rcx, rbx
+	shr rcx, 9			; TODO - This isn't the exact math but good enough
+	add rcx, 1			; number of PDPE's to make.. each PDPE maps 1GB of physical memory
+	mov edi, 0x00004000		; location of high PDPE
+	mov eax, 0x00020007		; location of first high PD. Bits (0) P, 1 (R/W), and 2 (U/S) set
+create_pdpe_high:
 	stosq
-	add rax, 0x0000000000200000
+	add rax, 0x00001000		; 4K later (512 records x 8 bytes)
+	dec ecx
+	cmp ecx, 0
+	jne create_pdpe_high
+
+; Create the high PD entries
+; EBX contains the number of pages that should exist in the map, once they are all found bail out
+	xor ecx, ecx
+	xor eax, eax
+	xor edx, edx
+	mov edi, 0x00020000		; Location of high PD entries
+	mov esi, 0x00400000		; Location of free pages map
+
+pd_high:
+	cmp rdx, rbx			; Compare mapped pages to max pages
+	je pd_high_done
+	lodsb
+	cmp al, 1
+	je pd_high_entry
 	add rcx, 1
-	cmp rcx, 30720			; Another 60 GiB (We already mapped 4 GiB)
-	jne buildem
-	; We have 64 GiB mapped now
+	jmp pd_high
+
+pd_high_entry:
+	mov eax, 0x0000008F		; Bits 0 (P), 1 (R/W), 2 (U/S), 3 (PWT), and 7 (PS) set
+	shl rcx, 21
+	add rax, rcx
+	shr rcx, 21
+	stosq
+	add rcx, 1
+	add rdx, 1			; We have mapped a valid page
+	jmp pd_high
+
+pd_high_done:
 
 ; Build a temporary IDT
-	xor rdi, rdi 			; create the 64-bit IDT (at linear address 0x0000000000000000)
+	xor edi, edi 			; create the 64-bit IDT (at linear address 0x0000000000000000)
 
 	mov rcx, 32
 make_exception_gates: 			; make gates for exception handlers
@@ -351,7 +384,7 @@ make_interrupt_gates: 			; make gates for the other interrupts
 	stosw				; store the high word (31..16) of the address
 	shr rax, 16
 	stosd				; store the extra high dword (63..32) of the address.
-	xor rax, rax
+	xor eax, eax
 	stosd				; reserved
 	dec rcx
 	jnz make_interrupt_gates
@@ -379,29 +412,26 @@ make_interrupt_gates: 			; make gates for the other interrupts
 	mov word [0x12*16], exception_gate_18
 	mov word [0x13*16], exception_gate_19
 
-	mov rdi, 0x21			; Set up Keyboard handler
-	mov rax, keyboard
+	mov edi, 0x21			; Set up Keyboard handler
+	mov eax, keyboard
 	call create_gate
-	mov rdi, 0x22			; Set up Cascade handler
-	mov rax, cascade
+	mov edi, 0x22			; Set up Cascade handler
+	mov eax, cascade
 	call create_gate
-	mov rdi, 0x28			; Set up RTC handler
-	mov rax, rtc
+	mov edi, 0x28			; Set up RTC handler
+	mov eax, rtc
 	call create_gate
 
 	lidt [IDTR64]			; load IDT register
 
-; Debug
-	mov [0x000B809E], byte '4'
-
 ; Clear memory 0xf000 - 0xf7ff for the infomap (2048 bytes)
-	xor rax, rax
-	mov rcx, 256
-	mov rdi, 0x000000000000F000
+	xor eax, eax
+	mov ecx, 256
+	mov edi, 0x0000F000
 clearmapnext:
 	stosq
-	dec rcx
-	cmp rcx, 0
+	dec ecx
+	cmp ecx, 0
 	jne clearmapnext
 
 	call init_acpi			; Find and process the ACPI tables
@@ -410,11 +440,7 @@ clearmapnext:
 
 	call init_pic			; Configure the PIC(s), also activate interrupts
 
-; Debug	
-	mov [0x000B809E], byte '6'	; CPU Init complete
-
-; Init of SMP
-	call init_smp
+	call init_smp			; Init of SMP
 
 ; Reset the stack to the proper location (was set to 0x8000 previously)
 	mov rsi, [os_LocalAPICAddress]	; We would call os_smp_get_id here but the stack is not ...
@@ -425,47 +451,8 @@ clearmapnext:
 	add rax, 0x0000000000050400	; stacks decrement when you "push", start at 1024 bytes in
 	mov rsp, rax			; Pure64 leaves 0x50000-0x9FFFF free so we use that
 
-; Debug		
-	mov [0x000B809C], byte '6'	; SMP Init complete
-	mov [0x000B809E], byte '0'
-
-; Calculate amount of usable RAM from Memory Map
-	xor rcx, rcx
-	mov rsi, 0x0000000000004000	; E820 Map location
-readnextrecord:
-	lodsq
-	lodsq
-	lodsd
-	cmp eax, 0			; Are we at the end?
-	je endmemcalc
-	cmp eax, 1			; Useable RAM
-	je goodmem
-	cmp eax, 3			; ACPI Reclaimable
-	je goodmem
-	cmp eax, 6			; BIOS Reclaimable
-	je goodmem
-	lodsd
-	lodsq
-	jmp readnextrecord
-goodmem:
-	sub rsi, 12
-	lodsq
-	add rcx, rax
-	lodsq
-	lodsq
-	jmp readnextrecord
-
-endmemcalc:
-	shr rcx, 20			; Value is in bytes so do a quick divide by 1048576 to get MiB's
-	add ecx, 1			; The BIOS will usually report actual memory minus 1
-	and ecx, 0xFFFFFFFE		; Make sure it is an even number (in case we added 1 to an even number)
-	mov dword [mem_amount], ecx
-
-; Debug
-	mov [0x000B809E], byte '2'
-
 ; Build the infomap
-	xor rdi, rdi
+	xor edi, edi
 	mov di, 0x5000
 	mov rax, [os_ACPITableAddress]
 	stosq
@@ -505,20 +492,38 @@ nextIOAPIC:
 	cmp cl, 0
 	jne nextIOAPIC
 
-; Debug
-	mov [0x000B809E], byte '4'
+	mov di, 0x5080
+	mov eax, [VBEModeInfoBlock.PhysBasePtr]		; Base address of video memory (if graphics mode is set)
+	stosd
+	mov eax, [VBEModeInfoBlock.XResolution]		; X and Y resolution (16-bits each)
+	stosd
+	mov al, [VBEModeInfoBlock.BitsPerPixel]		; Color depth
+	stosb
 
 ; Move the trailing binary to its final location
-	mov rsi, 0x8000+PURE64SIZE	; Memory offset to end of pure64.sys
-	mov rdi, 0x100000		; Destination address at the 1MiB mark
-	mov rcx, ((32768 - PURE64SIZE) / 8)
+	mov esi, 0x8000+PURE64SIZE	; Memory offset to end of pure64.sys
+	mov edi, 0x100000		; Destination address at the 1MiB mark
+	mov ecx, ((32768 - PURE64SIZE) / 8)
 	rep movsq			; Copy 8 bytes at a time
 
-; Debug
-	mov rdi, 0x000B8090		; Clear the debug messages in the top-right corner
-	mov rax, 0x0720072007200720
-	stosq
-	stosq				; Write a total of 8 characters (2 bytes each)
+; Output message via serial port
+	cld				; Clear the direction flag.. we want to increment through the string
+	mov dx, 0x03F8			; Address of first serial port
+	mov rsi, message		; Location of message
+	mov cx, 11			; Length of message
+serial_nextchar:
+	jrcxz serial_done		; If RCX is 0 then the function is complete
+	add dx, 5			; Offset to Line Status Register
+	in al, dx
+	sub dx, 5			; Back to to base
+	and al, 0x20
+	cmp al, 0
+	je serial_nextchar
+	dec cx
+	lodsb				; Get char from string and store in AL
+	out dx, al			; Send the char to the serial port
+	jmp serial_nextchar
+serial_done:
 
 ; Clear all registers (skip the stack pointer)
 	xor eax, eax			; These 32-bit calls also clear the upper bits of the 64-bit registers
@@ -536,38 +541,7 @@ nextIOAPIC:
 	xor r13, r13
 	xor r14, r14
 	xor r15, r15
-
-; Check binary that was loaded and execute
-; Raw binary and PE supported
-; To-Do - ELF
-
-; PE loader header check
-	mov eax, [0x10003c]		; Get the e_lfanew value which is the address of the PE header (32bit).
-	mov cx, [eax + 0x100004]	; The machine type.
-	cmp cx, 0x8664			; Check to make sure the machine type is x64.
-	jne normal_start		; If it isn't equal jump to the normal starting address. (Comment out to ignore result.)
-	mov ebx, [eax + 0x100000]	; The PE header signature is here.
-	cmp ebx, 0x00004550		; Compare the PE header signature to make sure it matches. (little endian)
-	jne normal_start		; If it isn't equal jump to the normal starting address.
-
-; PE loader starting address (RVA) parsing
-	add eax, 0x100028		; Add size of PE header (24 bytes) and offset to
-					; AddressOfEntryPoint (16 bytes) to image base 0x100000
-	mov ebx, [eax]			; AddressOfEntryPoint added to ImageBase to get entry point address
-	add eax, 0x08			; Add the offset to get the ImageBase
-	add ebx, [eax]			; Add ImageBase to AddressOfEntryPoint (ebx)
-
-	xor eax, eax			; Clear rax and rcx; rbx has the jump location so don't clear it.
-	xor ecx, ecx
-
-pe_start:
-	jmp rbx				; rbx has the compute RVA for the jmp
-
-normal_start:
-	xor eax, eax			; Clear registers used earlier
-	xor ebx, ebx
-	xor ecx, ecx
-	jmp 0x0000000000100000
+	jmp 0x00100000
 
 
 %include "init/acpi.asm"

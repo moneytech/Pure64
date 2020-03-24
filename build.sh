@@ -1,8 +1,16 @@
 #!/bin/bash
 
-nasm src/bootsectors/bmfs_mbr.asm -o bmfs_mbr.sys
-nasm src/bootsectors/multiboot.asm -o multiboot.sys
-nasm src/bootsectors/pxestart.asm -o pxestart.sys
+mkdir -p bin
+
 cd src
-nasm pure64.asm -o ../pure64.sys
-cd ..
+
+nasm pure64.asm -o ../bin/pure64.sys
+
+cd bootsectors
+
+nasm mbr.asm -o ../../bin/mbr.sys
+nasm pxestart.asm -o ../../bin/pxestart.sys
+nasm multiboot.asm -o ../../bin/multiboot.sys
+nasm multiboot2.asm -o ../../bin/multiboot2.sys
+
+cd ../..
